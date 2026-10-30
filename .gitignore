@@ -1,0 +1,10 @@
+.clasp.json
+.clasprc.json
+.local/
+node_modules/
+*.xlsx
+*.pkl
+*.parquet
+*.csv
+source_import_inventory.json
+
