@@ -22,7 +22,9 @@ LH.Planner = (function () {
     if (state.sheet >= sheets.length) { state.phase = 'PLAN'; LH.saveState(state); }
   }
   function build(hub, engine, settings) {
-    var C = LH.Core, books = {}, sheets = {}, refs = {}, datasets = {}, templates = LH.IO.readTable(hub, '__Formulas');
+    var C = LH.Core, books = {}, sheets = {}, refs = {}, datasets = {}, unique = {};
+    LH.IO.readTable(hub, '__Formulas').forEach(function (t) { unique[t.key]=t; });
+    var templates=Object.keys(unique).map(function (k) { return unique[k]; });
     var overrides = JSON.parse(settings.SOURCE_OVERRIDES || '{}');
     function book(id) { return books[id] || (books[id] = SpreadsheetApp.openById(id)); }
     function sourceSheet(id, tab) {

@@ -4,6 +4,8 @@ LH.IO = (function () {
   var C = function () { return LH.Core; };
   function raw(id, a1, values) {
     if (!values.length) return;
+    var r=C().range(a1), width=values.reduce(function (n,row) { return Math.max(n,row.length); },0);
+    ensure(SpreadsheetApp.openById(id),r.tab,r.r1+values.length-1,r.c1+width-1);
     Sheets.Spreadsheets.Values.update({ values: values, majorDimension: 'ROWS' }, id, a1, { valueInputOption: 'RAW' });
   }
   function values(id, a1, width, height) {

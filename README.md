@@ -109,6 +109,8 @@ registry cells, assumptions and actual budget formulas remain intact.
 - Every data chunk is read back and checked before continuing. Source error cells
   fail the refresh; they are not silently converted to zero.
 - The job checkpoints before the Apps Script runtime limit and can resume.
+- `retryFailedJob` retries a failed checkpoint after the underlying problem is
+  resolved. A partial discovery cannot be used to start migration.
 - Pending data is staged in both workbooks. Published tables are replaced and old
   tails cleared in a single Sheets `batchUpdate` per workbook. The engine commits
   last. Two different workbooks cannot share one transaction.

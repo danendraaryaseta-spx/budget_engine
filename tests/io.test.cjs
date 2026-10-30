@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 function load(mocks) {
-  const ctx = vm.createContext({ console, ...mocks });
+  const defaultSheet={getMaxRows:()=>100,getMaxColumns:()=>100};
+  const ctx = vm.createContext({ console, SpreadsheetApp:{openById:()=>({getSheetByName:()=>defaultSheet})}, ...mocks });
   for (const f of ['Core.js','Config.js','Sheets.js','Runner.js','Publish.js']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../src',f),'utf8'),ctx);
   return ctx;
 }
@@ -24,6 +25,13 @@ test('publication clears old table tails and pastes values only', () => {
   assert.equal(requests[0].updateCells.fields,'userEnteredValue');
   assert.equal(requests[1].copyPaste.pasteType,'PASTE_VALUES');
   assert.equal(requests[1].copyPaste.destination.endRowIndex,8);
+});
+test('append writes expand table grids instead of failing at the third log row', () => {
+  let added=0;
+  const sheet={getMaxRows:()=>2,getMaxColumns:()=>2,insertRowsAfter:(_,n)=>{added=n;},insertColumnsAfter:()=>{}};
+  const ctx=load({SpreadsheetApp:{openById:()=>({getSheetByName:()=>sheet})},Sheets:{Spreadsheets:{Values:{update:()=>{}}}}});
+  ctx.LH.IO.raw('hub',"'Refresh Log'!A3",[['event']]);
+  assert.equal(added,1);
 });
 test('capacity check blocks expansion before touching the engine', () => {
   const ctx=load({});

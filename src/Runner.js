@@ -60,7 +60,8 @@ function startRefresh() {
   LH.withLock(function () {
     var c = LH.context(), old = LH.state();
     LH.Core.assert(!old || ['FAILED','PUBLISHED','DISCOVERED'].indexOf(old.phase) >= 0, 'Finish the active job first');
-    LH.Core.assert(LH.IO.readTable(c.hub,'__Formulas').length, 'Run discoverImports first');
+    LH.Core.assert(PropertiesService.getScriptProperties().getProperty('DISCOVERY_DONE')==='YES','Complete discoverImports first; a partial discovery cannot be migrated');
+    LH.Core.assert(LH.IO.readTable(c.hub,'__Formulas').length, 'No import templates found');
     var s = { id:Utilities.getUuid(), phase:'PLAN', dataset:0, nextRow:1, manual:0, engineId:c.engine.getId(), runDate:c.settings.SOURCE_DATE || Utilities.formatDate(new Date(),LH.Config.timezone,'yyyy-MM-dd') };
     LH.saveState(s); LH.log(c.hub,s,'Refresh requested'); LH.step(c,s);
   });
@@ -82,7 +83,7 @@ LH.step = function (c,s) {
     }
     if (s.phase === 'DISCOVER') {
       LH.Planner.discoverStep(c.hub,c.engine,s,deadline);
-      if (s.phase === 'PLAN') { s.phase = 'DISCOVERED'; LH.saveState(s); LH.log(c.hub,s,'Discovery complete. Run startRefresh.'); } return;
+      if (s.phase === 'PLAN') { s.phase = 'DISCOVERED'; PropertiesService.getScriptProperties().setProperty('DISCOVERY_DONE','YES'); LH.saveState(s); LH.log(c.hub,s,'Discovery complete. Run startRefresh.'); } return;
     }
     if (s.phase === 'PLAN') {
       c.settings.RUN_DATE = s.runDate;
@@ -135,9 +136,17 @@ LH.step = function (c,s) {
     if (s.phase==='PUBLISH' && Date.now()<deadline-15000) LH.publish(c,s,datasets);
     else LH.log(c.hub,s,'Checkpoint saved. Run continueRefresh.');
   } catch (e) {
-    if (s.phase!=='COMMITTING' && s.phase!=='PUBLISHED') { s.phase='FAILED'; s.error=e.message; LH.saveState(s); }
+    if (s.phase!=='COMMITTING' && s.phase!=='PUBLISHED') { s.failedPhase=s.phase; s.phase='FAILED'; s.error=e.message; LH.saveState(s); }
     try { LH.log(c.hub,s,'ERROR: '+e.message); } catch (ignored) { console.error(ignored.message); }
     throw e;
   }
 };
+
+function retryFailedJob() {
+  LH.withLock(function () {
+    var c=LH.context(),s=LH.state(); LH.Core.assert(s && s.phase==='FAILED' && s.failedPhase,'No failed checkpoint to retry');
+    LH.Core.assert(s.engineId===c.engine.getId(),'ENGINE_ID changed');
+    s.phase=s.failedPhase; delete s.failedPhase; delete s.error; LH.saveState(s); LH.step(c,s);
+  });
+}
 

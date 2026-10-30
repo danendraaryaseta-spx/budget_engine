@@ -1,7 +1,7 @@
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Budget Sources').addItem('Initialize hub','setup').addItem('Create engine copy','createEngineCopy')
     .addSeparator().addItem('Discover imports','discoverImports').addItem('Refresh sources','startRefresh').addItem('Continue pending job','continueRefresh')
-    .addItem('Show status','showRefreshStatus').addSeparator().addItem('Install daily refresh','installRefreshTrigger').addItem('Remove refresh triggers','removeRefreshTriggers').addToUi();
+    .addItem('Retry failed checkpoint','retryFailedJob').addItem('Show status','showRefreshStatus').addSeparator().addItem('Install daily refresh','installRefreshTrigger').addItem('Remove refresh triggers','removeRefreshTriggers').addToUi();
 }
 function showRefreshStatus() { console.log(JSON.stringify(LH.state(),null,2)); }
 function scheduledRefresh() {
