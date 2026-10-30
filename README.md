@@ -22,7 +22,7 @@ rounding, rates and cost arithmetic keep calculating in the engine.
    script must be able to read every upstream workbook.
 2. On **Control**, set `TEMPLATE_ID` to the existing engine's ID and `LM_SOURCE_ID`
    to the workbook containing `Final Proj (Budget)`.
-3. Run `createEngineCopy`. It creates a separate working engine and records its ID.
+3. If `ENGINE_ID` is blank, run `createEngineCopy`. It creates a separate working engine and records its ID.
    Refresh refuses to modify the original template.
 4. Run `discoverImports`. It scans **all formula rows**, not only the header rows.
    If it checkpoints, run `continueRefresh` until status is `DISCOVERED`.
