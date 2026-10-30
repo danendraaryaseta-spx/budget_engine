@@ -14,14 +14,15 @@ LH.context = function () {
   return { hub: hub, engine: SpreadsheetApp.openById(engineId), settings: settings };
 };
 LH.log = function (hub, s, message) {
-  var sh = LH.IO.ensure(hub, 'Refresh Log', 2, 6);
-  if (!sh.getRange('A1').getValue()) LH.IO.raw(hub.getId(), "'Refresh Log'!A1", [['Timestamp (WIB)','Run','Phase','Dataset','Next row','Message']]);
-  LH.IO.raw(hub.getId(), "'Refresh Log'!A" + (sh.getLastRow() + 1), [[Utilities.formatDate(new Date(), LH.Config.timezone, 'yyyy-MM-dd HH:mm:ss'),s.id,s.phase,s.dataset || 0,s.nextRow || 1,message]]);
+  LH.IO.ensure(hub, 'Refresh Log', 2, 6);
+  var entries=LH.IO.rows(hub,'Refresh Log',6);
+  if (!entries.length) { LH.IO.raw(hub.getId(), "'Refresh Log'!A1", [['Timestamp (WIB)','Run','Phase','Dataset','Next row','Message']]); entries=[[]]; }
+  LH.IO.raw(hub.getId(), "'Refresh Log'!A" + (entries.length + 1), [[Utilities.formatDate(new Date(), LH.Config.timezone, 'yyyy-MM-dd HH:mm:ss'),s.id,s.phase,s.dataset || 0,s.nextRow || 1,message]]);
 };
 function setup() {
   var hub = SpreadsheetApp.getActiveSpreadsheet(); LH.Core.assert(hub, 'Run from the bound script');
   PropertiesService.getScriptProperties().setProperty('HUB_ID', hub.getId()); hub.setSpreadsheetTimeZone(LH.Config.timezone);
-  if (!hub.getSheetByName('Control')) {
+  if (!LH.IO.sheet(hub,'Control')) {
     var sh = LH.IO.ensure(hub, 'Control', 12, 3);
     LH.IO.raw(hub.getId(), "'Control'!A1", [
       ['Setting','Value','Description'],
@@ -34,8 +35,13 @@ function setup() {
       ['LAST_PUBLISHED_AT','','WIB timestamp'],
       ['SOURCE_DATE','','Optional YYYY-MM-DD for dated schedule selection; blank = today']
     ]);
-    sh.setFrozenRows(1); sh.getRange('A1:C1').setFontWeight('bold').setBackground('#17365D').setFontColor('#FFFFFF');
-    sh.setColumnWidth(1,180); sh.setColumnWidth(2,450); sh.setColumnWidth(3,600);
+    Sheets.Spreadsheets.batchUpdate({requests:[
+      {updateSheetProperties:{properties:{sheetId:sh.sheetId,gridProperties:{frozenRowCount:1}},fields:'gridProperties.frozenRowCount'}},
+      {repeatCell:{range:{sheetId:sh.sheetId,startRowIndex:0,endRowIndex:1},cell:{userEnteredFormat:{backgroundColor:{red:0.09,green:0.21,blue:0.36},textFormat:{bold:true,foregroundColor:{red:1,green:1,blue:1}}}},fields:'userEnteredFormat'}},
+      {updateDimensionProperties:{range:{sheetId:sh.sheetId,dimension:'COLUMNS',startIndex:0,endIndex:1},properties:{pixelSize:180},fields:'pixelSize'}},
+      {updateDimensionProperties:{range:{sheetId:sh.sheetId,dimension:'COLUMNS',startIndex:1,endIndex:2},properties:{pixelSize:450},fields:'pixelSize'}},
+      {updateDimensionProperties:{range:{sheetId:sh.sheetId,dimension:'COLUMNS',startIndex:2,endIndex:3},properties:{pixelSize:600},fields:'pixelSize'}}
+    ]},hub.getId());
   }
 }
 function createEngineCopy() {
@@ -76,8 +82,8 @@ LH.step = function (c,s) {
   var deadline = Date.now() + LH.Config.executionMs;
   try {
     if (s.phase === 'COMMITTING') {
-      var status=c.engine.getSheetByName('__Source_Status');
-      if (status && status.getRange('B1').getValue()===s.id) { LH.finishPublication(c,s); return; }
+      var status=LH.IO.sheet(c.engine,'__Source_Status');
+      if (status && LH.IO.values(c.engine.getId(),"'__Source_Status'!B1",1,1)[0][0]===s.id) { LH.finishPublication(c,s); return; }
       // A batchUpdate may have succeeded even if its HTTP response was lost. Check the run ID first.
       s.phase='PUBLISH'; LH.saveState(s);
     }
@@ -136,7 +142,7 @@ LH.step = function (c,s) {
     if (s.phase==='PUBLISH' && Date.now()<deadline-15000) LH.publish(c,s,datasets);
     else LH.log(c.hub,s,'Checkpoint saved. Run continueRefresh.');
   } catch (e) {
-    if (s.phase!=='COMMITTING' && s.phase!=='PUBLISHED') { s.failedPhase=s.phase; s.phase='FAILED'; s.error=e.message; LH.saveState(s); }
+    if (['COMMITTING','PUBLISHED','DISCOVERED'].indexOf(s.phase)<0) { s.failedPhase=s.phase; s.phase='FAILED'; s.error=e.message; LH.saveState(s); }
     try { LH.log(c.hub,s,'ERROR: '+e.message); } catch (ignored) { console.error(ignored.message); }
     throw e;
   }
@@ -146,7 +152,18 @@ function retryFailedJob() {
   LH.withLock(function () {
     var c=LH.context(),s=LH.state(); LH.Core.assert(s && s.phase==='FAILED' && s.failedPhase,'No failed checkpoint to retry');
     LH.Core.assert(s.engineId===c.engine.getId(),'ENGINE_ID changed');
-    s.phase=s.failedPhase; delete s.failedPhase; delete s.error; LH.saveState(s); LH.step(c,s);
+    s.phase=s.failedPhase; delete s.failedPhase; delete s.error; LH.saveState(s);
+    if (s.phase!=='DISCOVERED') LH.step(c,s);
   });
+}
+
+// One recovery entry point for the stale-tab error, regardless of whether the
+// discovery checkpoint was saved immediately before the logging failure.
+function resumeSources() {
+  var s=LH.state();
+  if (s && s.phase==='FAILED') { retryFailedJob(); s=LH.state(); }
+  if (s && s.phase==='DISCOVERED') return startRefresh();
+  if (s && ['DISCOVER','PLAN','PULL','MANUAL','PUBLISH','COMMITTING'].indexOf(s.phase)>=0) return continueRefresh();
+  LH.Core.assert(s && s.phase==='PUBLISHED','Run discoverImports to initialize source discovery');
 }
 

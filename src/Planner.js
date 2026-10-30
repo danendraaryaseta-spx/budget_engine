@@ -14,8 +14,9 @@ LH.Planner = (function () {
       }); });
       state.row += count;
       if (batch.length) {
-        var out = LH.IO.ensure(hub, '__Formulas', 2, 2);
-        LH.IO.raw(hub.getId(), "'__Formulas'!A" + (out.getLastRow() + 1), batch.map(function (x) { return [x.key, JSON.stringify(x)]; })); batch = [];
+        LH.IO.ensure(hub, '__Formulas', 2, 2);
+        var next=LH.IO.rows(hub,'__Formulas',2).length+1;
+        LH.IO.raw(hub.getId(), "'__Formulas'!A" + next, batch.map(function (x) { return [x.key, JSON.stringify(x)]; })); batch = [];
       }
       LH.saveState(state);
     }

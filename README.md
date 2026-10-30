@@ -111,6 +111,10 @@ registry cells, assumptions and actual budget formulas remain intact.
 - The job checkpoints before the Apps Script runtime limit and can resume.
 - `retryFailedJob` retries a failed checkpoint after the underlying problem is
   resolved. A partial discovery cannot be used to start migration.
+- `resumeSources` resumes a pending run or starts the refresh after discovery.
+  It also recovers discovery that finished but whose final log write failed.
+- Tab creation, lookup, resizing and owned-table reads use Sheets API metadata.
+  They do not depend on SpreadsheetApp's potentially stale tab-list cache.
 - Pending data is staged in both workbooks. Published tables are replaced and old
   tails cleared in a single Sheets `batchUpdate` per workbook. The engine commits
   last. Two different workbooks cannot share one transaction.

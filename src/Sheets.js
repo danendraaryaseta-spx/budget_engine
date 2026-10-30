@@ -2,6 +2,23 @@ var LH = LH || {};
 LH.IO = (function () {
   'use strict';
   var C = function () { return LH.Core; };
+  // SpreadsheetApp can retain a stale tab list after an advanced-service write.
+  // Keep owned-tab metadata in the same API as tab creation, never native handles.
+  var metadata = {};
+  function bookMetadata(book, force) {
+    var id=book.getId();
+    if (force || !metadata[id]) metadata[id]=Sheets.Spreadsheets.get(id,{fields:'properties.title,sheets.properties(sheetId,title,gridProperties)'});
+    return metadata[id];
+  }
+  function sheet(book, name, force) {
+    var found=(bookMetadata(book,force).sheets||[]).filter(function (s) { return s.properties.title===name; });
+    return found.length ? found[0].properties : null;
+  }
+  function rows(book, name, width) {
+    var p=sheet(book,name); if (!p) return [];
+    var a1=C().quote(name)+'!A1:'+C().column(width||p.gridProperties.columnCount)+p.gridProperties.rowCount;
+    return Sheets.Spreadsheets.Values.get(book.getId(),a1,{valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'}).values||[];
+  }
   function raw(id, a1, values) {
     if (!values.length) return;
     var r=C().range(a1), width=values.reduce(function (n,row) { return Math.max(n,row.length); },0);
@@ -13,26 +30,38 @@ LH.IO = (function () {
     return C().rectangular(r.values || [], width, height);
   }
   function ensure(book, name, rows, cols) {
-    var sh = book.getSheetByName(name);
-    if (!sh) {
-      Sheets.Spreadsheets.batchUpdate({ requests: [{ addSheet: { properties: { title: name, gridProperties: { rowCount: Math.max(1, rows), columnCount: Math.max(1, cols) } } } }] }, book.getId());
-      sh = SpreadsheetApp.openById(book.getId()).getSheetByName(name);
+    rows=Math.max(1,rows); cols=Math.max(1,cols);
+    var p=sheet(book,name);
+    if (!p) p=sheet(book,name,true); // Another invocation may have created it.
+    if (!p) {
+      try {
+        var result=Sheets.Spreadsheets.batchUpdate({requests:[{addSheet:{properties:{title:name,gridProperties:{rowCount:rows,columnCount:cols}}}}]},book.getId());
+        p=result.replies[0].addSheet.properties;
+        bookMetadata(book).sheets.push({properties:p});
+      } catch (e) {
+        // A concurrent creator can win between the read and add. Only recover if
+        // the server actually contains the requested sheet; propagate other errors.
+        p=sheet(book,name,true); if (!p) throw e;
+      }
     }
-    if (rows > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), rows - sh.getMaxRows());
-    if (cols > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), cols - sh.getMaxColumns());
-    return sh;
+    C().assert(p && p.gridProperties,'Sheets API did not return metadata for '+name);
+    var nr=Math.max(rows,p.gridProperties.rowCount),nc=Math.max(cols,p.gridProperties.columnCount);
+    if (nr!==p.gridProperties.rowCount || nc!==p.gridProperties.columnCount) {
+      Sheets.Spreadsheets.batchUpdate({requests:[{updateSheetProperties:{properties:{sheetId:p.sheetId,gridProperties:{rowCount:nr,columnCount:nc}},fields:'gridProperties.rowCount,gridProperties.columnCount'}}]},book.getId());
+      p.gridProperties.rowCount=nr; p.gridProperties.columnCount=nc;
+    }
+    return p;
   }
   function table(book, name, objects) {
-    var sh = ensure(book, name, Math.max(2, objects.length + 1), 2);
-    var rows = [['Key', 'JSON']].concat(objects.map(function (x, i) { return [x.key || String(i + 1), JSON.stringify(x)]; }));
-    raw(book.getId(), C().quote(name) + '!A1', rows);
-    if (sh.getLastRow() > rows.length) sh.getRange(rows.length + 1, 1, sh.getLastRow() - rows.length, 2).clearContent();
-    sh.setFrozenRows(1); return sh;
+    var p = ensure(book, name, Math.max(2, objects.length + 1), 2);
+    var data = [['Key', 'JSON']].concat(objects.map(function (x, i) { return [x.key || String(i + 1), JSON.stringify(x)]; }));
+    raw(book.getId(), C().quote(name) + '!A1', data);
+    if (p.gridProperties.rowCount>data.length) Sheets.Spreadsheets.Values.clear({},book.getId(),C().quote(name)+'!A'+(data.length+1)+':B'+p.gridProperties.rowCount);
+    Sheets.Spreadsheets.batchUpdate({requests:[{updateSheetProperties:{properties:{sheetId:p.sheetId,gridProperties:{frozenRowCount:1}},fields:'gridProperties.frozenRowCount'}}]},book.getId());
+    return p;
   }
   function readTable(book, name) {
-    var sh = book.getSheetByName(name);
-    if (!sh || sh.getLastRow() < 2) return [];
-    return sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().filter(function (r) { return r[0]; }).map(function (r) { return JSON.parse(r[0]); });
+    return rows(book,name,2).slice(1).filter(function (r) { return r[1]; }).map(function (r) { return JSON.parse(r[1]); });
   }
   function hash(x) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(x)).map(function (v) { return ('0' + ((v + 256) % 256).toString(16)).slice(-2); }).join(''); }
   function writeVerified(book, name, firstRow, rows, width) {
@@ -43,23 +72,22 @@ LH.IO = (function () {
     C().assert(hash(rows) === hash(values(book.getId(), a1, width, rows.length)), 'Readback mismatch: ' + name + ' at row ' + firstRow);
   }
   function capacity(book, additions) {
-    var total = book.getSheets().reduce(function (n, s) { return n + s.getMaxRows() * s.getMaxColumns(); }, 0);
-    additions.forEach(function (a) {
-      var s = book.getSheetByName(a.name);
-      total += Math.max(a.rows, s ? s.getMaxRows() : 0) * Math.max(a.cols, s ? s.getMaxColumns() : 0) - (s ? s.getMaxRows() * s.getMaxColumns() : 0);
-    });
-    C().assert(total <= LH.Config.maxWorkbookCells, book.getName() + ' would need ' + total + ' cells. Trim unused grids or reduce source scope before retrying.');
+    var meta=bookMetadata(book,true),grids={};
+    (meta.sheets||[]).forEach(function (s) { grids[s.properties.title]={rows:s.properties.gridProperties.rowCount,cols:s.properties.gridProperties.columnCount}; });
+    additions.forEach(function (a) { var g=grids[a.name]||{rows:0,cols:0}; grids[a.name]={rows:Math.max(a.rows,g.rows),cols:Math.max(a.cols,g.cols)}; });
+    var total=Object.keys(grids).reduce(function (n,k) { return n+grids[k].rows*grids[k].cols; },0);
+    C().assert(total <= LH.Config.maxWorkbookCells, meta.properties.title + ' would need ' + total + ' cells. Trim unused grids or reduce source scope before retrying.');
     return total;
   }
   function publishRequests(book, stageName, liveName, rows, cols) {
-    var live = book.getSheetByName(liveName), stage = book.getSheetByName(stageName);
+    var live = sheet(book,liveName), stage = sheet(book,stageName);
     C().assert(live && stage, 'Missing staging or live table: ' + liveName);
     return [
-      { updateCells: { range: { sheetId: live.getSheetId() }, fields: 'userEnteredValue' } },
-      { copyPaste: { source: { sheetId: stage.getSheetId(), startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols },
-        destination: { sheetId: live.getSheetId(), startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols }, pasteType: 'PASTE_VALUES' } }
+      { updateCells: { range: { sheetId: live.sheetId }, fields: 'userEnteredValue' } },
+      { copyPaste: { source: { sheetId: stage.sheetId, startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols },
+        destination: { sheetId: live.sheetId, startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols }, pasteType: 'PASTE_VALUES' } }
     ];
   }
-  return { raw: raw, values: values, ensure: ensure, table: table, readTable: readTable, hash: hash, writeVerified: writeVerified, capacity: capacity, publishRequests: publishRequests };
+  return { raw: raw, values: values, ensure: ensure, sheet:sheet, rows:rows, table: table, readTable: readTable, hash: hash, writeVerified: writeVerified, capacity: capacity, publishRequests: publishRequests };
 }());
 
